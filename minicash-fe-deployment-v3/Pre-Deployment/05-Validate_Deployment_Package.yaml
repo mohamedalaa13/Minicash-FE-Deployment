@@ -1,0 +1,30 @@
+- name: 05- Validate Deployment Package on Jenkins Server
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    Pre_Deployment_Vars.txt
+  tasks:
+      
+    - name: Unzip {{ Application_Name }} Deploymet Package on Jenkins Server
+      ansible.builtin.unarchive:
+         src: "{{ Pre_Deployment_Workspace }}/{{ Application_Name }}.zip"
+         dest: "{{ Pre_Deployment_Workspace }}/{{ Deployment_Package_Folder }}/"
+
+    - name: "Register {{ Application_Name }} New Package Folder Structure stat into Ansible Variable"
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+      - "{{ Pre_Deployment_Workspace }}/{{ Deployment_Package_Folder }}/{{ Application_Name }}/"
+      - "{{ Pre_Deployment_Workspace }}/{{ Deployment_Package_Folder }}/{{ Application_Name }}/assets/"
+      - "{{ Pre_Deployment_Workspace }}/{{ Deployment_Package_Folder }}/{{ Application_Name }}/web.config"
+      register: new_package_structure_stat
+
+    - name: Print variable
+      ansible.builtin.debug:
+        var: new_package_structure_stat
+
+    - name: "Fail if New Package Folder Structure does not exists"
+      ansible.builtin.fail:
+        msg: "The Folder ({{ item.item }}) doesn't exists"
+      when: item.stat.exists == false
+      loop: "{{ new_package_structure_stat.results }}"

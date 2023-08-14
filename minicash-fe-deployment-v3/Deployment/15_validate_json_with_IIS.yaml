@@ -1,0 +1,47 @@
+- name: Validate JSON with IIS
+  hosts: win
+  gather_facts: true
+  vars_files:
+    - Deployment_Variables.txt
+  vars:
+    iis_saved_configuration_json: "{{ lookup('file', 'iis-website-config.json') | from_json }}"
+
+  tasks:
+    - name: Retrieve {{ app_name }} IIS Configuration From  "{{ ansible_hostname }}"
+      win_iis_website:
+        name: "{{ app_name }}"
+      register: iis_website_current_configurations
+
+    - name: Print variable
+      ansible.builtin.debug:
+        var: iis_website_current_configurations
+
+    - name: print iis-website-config.json
+      ansible.builtin.debug:
+        var: iis_saved_configuration_json
+
+    - name: Fail if Current Site Name != Saved Site Name in iis-website-config.json
+      ansible.builtin.fail:
+        msg: "Current {{ iis_website_current_configurations.site.Name }} != Saved {{ iis_saved_configuration_json.Site }}"
+      when: iis_website_current_configurations.site.Name != iis_saved_configuration_json.Site
+
+    - name: Fail if Current ApplicationPool != Saved ApplicationPool in iis-website-config.json
+      ansible.builtin.fail:
+        msg: "Current {{ iis_website_current_configurations.site.ApplicationPool }} != Saved {{ iis_saved_configuration_json.applicationPool }}"
+      when: iis_website_current_configurations.site.ApplicationPool != iis_saved_configuration_json.applicationPool
+
+    - name: Fail if Current Binding != Saved Binding in iis-website-config.json
+      ansible.builtin.fail:
+        msg: "Current {{ iis_website_current_configurations.site.Bindings[0] }} != Saved {{ iis_saved_configuration_json.Bindings }}"
+      when: iis_website_current_configurations.site.Bindings[0] != iis_saved_configuration_json.Bindings
+
+    - name: Fail if Current Physical Path != Saved Physical Path in iis-website-config.json
+      ansible.builtin.fail:
+        msg: "Current {{ iis_website_current_configurations.site.PhysicalPath }} != Saved {{ iis_saved_configuration_json.PhysicalPath }}"
+      when: iis_website_current_configurations.site.PhysicalPath != iis_saved_configuration_json.PhysicalPath
+
+    - name: Fail if Current State != Saved State in iis-website-config.json
+      ansible.builtin.fail:
+        msg: "Current {{ iis_website_current_configurations.site.State }} != Saved {{ iis_saved_configuration_json.State }}"
+      when: iis_website_current_configurations.site.State != iis_saved_configuration_json.State
+

@@ -1,0 +1,32 @@
+- name: Get IIS-Config and Web.config File
+  hosts: win
+  gather_facts: false
+
+  tasks:
+
+  - name: Get IIS-Config and Web.config File
+    ansible.windows.win_powershell:
+      script: |
+         $IisServer = (hostname)
+         New-PSDrive -Name Y -PSProvider FileSystem -Root \\Win19-DevOpsProd\Public_Share_Name\MiniCashFE -Verbose
+         $webSites = Get-IISSite
+
+         foreach( $site in $webSites ) {
+            $targetPath = "Y:\\$IisServer\\$($site.Name)"
+            New-Item -Path $targetPath -ItemType Directory -Verbose -Force
+            Copy-Item "$((Get-Website "$($site.Name)").PhysicalPath)\\Web.config" -Destination "$targetPath" -Verbose -Force
+
+            $iisWebsiteConfigJson = @{
+               'Site' = "$($site.Name)"
+               'Id' = "$($site.Id)"
+               'applicationPool' = "$((Get-Website "$($site.Name)").applicationPool)"
+               'PhysicalPath' = "$((Get-Website "$($site.Name)").PhysicalPath)"
+               'State' = "$((Get-Website "$($site.Name)").State)"
+               'Bindings' = "$($site.Bindings.BindingInformation)"
+            }
+
+            $iisWebsiteConfigVariable = $iisWebsiteConfigJson | ConvertTo-Json | Out-File "$targetPath\\iis-website-config.json" -Encoding ASCII -Verbose
+
+         }
+
+         Get-IISSite | Select-Object Name, State | ConvertTo-Json | Out-File "Y:\\$IisServer\\iis-server-config.json" -Encoding ASCII -Verbose

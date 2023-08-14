@@ -1,0 +1,63 @@
+- name: Backup current Package
+  hosts: win
+  gather_facts: false
+  vars_files:
+    - Deployment_Variables.txt
+  vars:
+    iis_saved_configuration_json: "{{ lookup('file', 'iis-website-config.json') | from_json }}"
+    current_package_basename: "{{ iis_saved_configuration_json.PhysicalPath | regex_search('\\w+$') }}"
+
+  tasks:
+    - name: Print variable
+      ansible.builtin.debug:
+        var: iis_saved_configuration_json
+
+    - name: Print variable
+      ansible.builtin.debug:
+        var: current_package_basename
+
+
+    - name: "Register {{ app_name }} Current Package Folder {{ iis_saved_configuration_json.PhysicalPath }} stat into Ansible Variable"
+      win_stat:
+        path: "{{ iis_saved_configuration_json.PhysicalPath }}"
+      register: current_package_folder_stat
+
+    - name: Fail if {{ app_name }} Current Package Folder doesn't exists in IIS Server
+      ansible.builtin.fail:
+        msg: "{{ iis_saved_configuration_json.PhysicalPath }} Current Package Folder doesn't exists in IIS Server"
+      when: current_package_folder_stat.stat.exists != true
+
+    - name: Print variable
+      ansible.builtin.debug:
+        var: current_package_folder_stat
+
+    - name: "Register Ansible Backups Folder stat into Ansible Variable"
+      win_stat:
+        path: "{{ Old_Package_Backup_Path }}"
+      register: ansible_backups_folder_stat
+
+    - name: Print variable
+      ansible.builtin.debug:
+        var: ansible_backups_folder_stat
+
+    - name: "Create Ansible Backups Folder in '{{ Old_Package_Backup_Path }}'"
+      ansible.windows.win_file:
+        path: "{{ Old_Package_Backup_Path }}"
+        state: directory
+      when: ansible_backups_folder_stat.stat.exists != true
+
+    - name: "Backup {{ iis_saved_configuration_json.PhysicalPath }} directory into '{{ Old_Package_Backup_Path }}\\{{ app_name }}_{{ timestamp }}.zip' "
+      community.windows.win_zip:
+        src: "{{ iis_saved_configuration_json.PhysicalPath }}"
+        dest: "{{ Old_Package_Backup_Path }}\\{{ current_package_basename }}_{{ timestamp }}.zip"
+      when: current_package_folder_stat.stat.exists == true
+
+    - name: "Register {{ current_package_basename }} Backup zip file stat into Ansible Variable"
+      win_stat:
+        path: "{{ Old_Package_Backup_Path }}\\{{ current_package_basename }}_{{ timestamp }}.zip"
+      register: backup_zip_file_stat
+
+    - name: Fail if {{ app_name }} Backup zip file doesn't exists in Backup folder
+      ansible.builtin.fail:
+        msg: "Backup zip file doesn't exists in Backup folder"
+      when: backup_zip_file_stat.stat.exists != true

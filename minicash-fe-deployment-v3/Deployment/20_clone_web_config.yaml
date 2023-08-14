@@ -1,0 +1,41 @@
+- name: Clone web.config file to Deployment Package
+  hosts: win
+  gather_facts: false
+  vars_files:
+    - Deployment_Variables.txt
+  vars:
+    iis_saved_configuration_json: "{{ lookup('file', 'iis-website-config.json') | from_json }}"
+    current_package_basename: "{{ iis_saved_configuration_json.PhysicalPath | regex_search('\\w+$') }}"
+
+  tasks:
+    - name: "Register {{ app_name }} Web.config file stat into Ansible Variable"
+      win_stat:
+        path: "{{ local_deployment_package_path }}\\{{ current_package_basename }}\\Web.config"
+      register: web_config_stat
+
+    - name: Print variable
+      ansible.builtin.debug:
+        var: web_config_stat
+
+    - name: "Delete {{ app_name }} web.config file if exists in Deployment Package"
+      win_file:
+        path: "{{ local_deployment_package_path }}\\{{ current_package_basename }}\\Web.config"
+        state: absent
+      when: web_config_stat.stat.exists == true
+
+    - name: Register {{ app_name }} web.config file to check if it's cloned into Jenkins Workspace
+      local_action:
+        module: ansible.builtin.stat
+        path: "{{ WebConfig_Jenkins_Path }}/Web.config"
+      register: Workspace_web_config_stat
+      run_once: true
+
+    - name: Fail if web.config file doesn't exists in Jenkins Workspace
+      ansible.builtin.fail:
+        msg: "web.config file doesn't exists in Jenkins Workspace"
+      when: Workspace_web_config_stat.stat.exists != true
+
+    - name: "Copy the Web.config file Jenkins Workspace to Deployment Package"
+      win_copy:
+        src: "{{ WebConfig_Jenkins_Path }}/Web.config"
+        dest: "{{ local_deployment_package_path }}\\{{ current_package_basename }}\\Web.config"

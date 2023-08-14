@@ -1,0 +1,76 @@
+def Pre_Deployment_Variables_content = """
+Application_Name: $params.Application_Name
+Deployment_Package_Folder: Deployment_Package
+"""
+
+
+pipeline {
+    agent {  label 'master'}
+
+    stages {
+        
+        stage('Clean Up before Deploy') {
+            steps {
+                cleanWs()
+            }    
+        }
+
+        stage('Clone Ansible Playbooks Git repo') {
+            steps {
+                echo "Cloning Ansible Playbooks Repo ...."
+                git credentialsId: 'Jenkins_Functional_Account-Prod', url: 'https://jenkins-sa-prod@bitbucket.org/btechlabs/minicash-fe-deployment-v3.git', branch: 'Initial-Branch'
+            }
+        }
+        
+        stage('Download Artifact From Nexus Repository Snapshot') {
+            steps {
+                echo 'Downloading Snapshot Artifact ......'
+                
+                withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId:'Nexus_Credentials', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD']]) {
+                     sh "curl -v -u $USERNAME:$PASSWORD -o ${WORKSPACE}/${params.Application_Name}.zip https://nexus.btech.com/repository/${params.Application_Name}-Snapshot/${params.Application_Name}.zip"
+                }
+                
+            }
+        }
+        
+        stage("Save Parameter to Ansible Files") {
+            steps {
+                echo "Save Jenkins Parameter into Ansible Files"
+                writeFile file: 'Pre-Deployment/Pre_Deployment_Vars.txt', text: Pre_Deployment_Variables_content
+                sh 'echo \"timestamp: $(date +\"%Y%m%d_%H%M\")\" | tee -a Pre-Deployment/Pre_Deployment_Vars.txt'
+            }
+        }
+        
+        stage('Append Web.config Path to Vars File') {
+            steps {
+                sh "echo \"Pre_Deployment_Workspace: '$env.workspace'\" | tee -a Pre-Deployment/Pre_Deployment_Vars.txt"
+            }
+        }
+        
+        stage('Create Deployment Package Folder on Jenkins Server') {
+            steps {
+                sh 'mkdir Deployment_Package'
+            }
+        }
+        
+        stage('Validate Deplyment Package') {
+            steps {
+                script {
+                    echo "Running Deployment Package Validation ...."
+                    sh '/var/lib/jenkins/.local/bin/ansible-playbook -i localhost Pre-Deployment/05-Validate_Deployment_Package.yaml -vvv'
+                }
+            }    
+        }
+        
+        stage('Upload Artifact to Nexus Repository Release') {
+            steps {
+                echo 'Uploading Release Artifact ......'
+                
+                withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId:'Nexus_Credentials', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD']]) {
+                     sh "curl -v -u $USERNAME:$PASSWORD --upload-file ./${params.Application_Name}.zip https://nexus.btech.com/repository/${params.Application_Name}-Release/${params.Deployment_Version}/${params.Application_Name}.zip"
+                }
+                
+            }
+        }
+    }
+}

@@ -1,0 +1,152 @@
+def newPackageDeployed = false;
+
+// Define variable
+def Deployment_Variables_content = """
+app_name: $params.Application_Name
+
+iis_configurations_path: $params.IIS_Configurations_Path
+local_deployment_package_path: $params.local_deployment_package_path
+Old_Package_Backup_Path: $params.Old_Package_Backup_Path
+rollback_package_path: $params.RollBack_Package_Path
+"""
+def Deployment_inventory_content = """[win]
+$params.IIS_Server_Hostname
+
+[win:vars]
+ansible_connection = winrm
+ansible_port = 5985
+ansible_winrm_transport= kerberos
+"""
+
+pipeline {
+    agent {  label 'master'}
+    parameters {
+        choice(name: "Application_Name", choices: ["MiniCashFE"], description: "")
+        string(name: "Deployment_Version", defaultValue: "MiniCashFE_25-05-2023", trim: true, description: "")
+        choice(name: "IIS_Server_Hostname", choices: ["Win19-DevOpsProd", "MC-FE-IIS1-AZ", "MC-FE-IIS2-AZ", "MinicashFE-IIS1", "MinicashFE-IIS2"], description: "IIS Server HostName")
+        string(name: "IIS_Configurations_Path", defaultValue: "/var/lib/jenkins/shehab-playground/iis-config/iis-website-config/MiniCashFE", trim: true, description: "")
+        string(name: "local_deployment_package_path", defaultValue: "c:\\Ansible\\Deployments", trim: true, description: "Path of package to be deployed ")
+        string(name: "Old_Package_Backup_Path", defaultValue: "c:\\Ansible\\Backups", trim: true, description: "Backup Path to store old release for rollback")
+        string(name: "RollBack_Package_Path", defaultValue: "c:\\Ansible\\RollBack", trim: true, description: "")
+        choice(name: "Web_Config_Changed", choices: ["true", "false"], description: "If Web.config file has changes and needs to be changed on Deployment Servers")
+    }
+    stages {
+        stage('Clean Up before Deploy') {
+            steps {
+                cleanWs()
+            }    
+        }
+        
+        stage('Clone Ansible Playbooks Git repo') {
+            steps {
+                echo "Cloning Ansible Playbooks Repo ...."
+                git credentialsId: 'Jenkins_Functional_Account-Prod', url: 'https://jenkins-sa-prod@bitbucket.org/btechlabs/minicash-fe-deployment-v3.git', branch: 'Initial-Branch'
+            }
+        }
+        
+        stage("Save Parameter to Ansible Files") {
+            steps {
+                echo "$env.stageResult"
+                echo "Save Jenkins Parameter into Ansible Files"
+                writeFile file: 'Deployment/Deployment_Variables.txt', text: Deployment_Variables_content
+                writeFile file: 'Deployment/Deployment_inventory.txt', text: Deployment_inventory_content
+                sh 'echo \"timestamp: $(date +\"%Y%m%d_%H%M\")\" | tee -a Deployment/Deployment_Variables.txt'
+            }
+        }
+        
+        stage('Append Ansible-Prod Credentials to Hosts File') {
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'Ansible_Prod_Credentials', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
+                    sh "echo \"ansible_user=$USERNAME\" | tee -a Deployment/Deployment_inventory.txt"
+                    sh "echo \"ansible_password=$PASSWORD\" | tee -a Deployment/Deployment_inventory.txt"
+                }
+            }
+        }
+
+        stage("Clone Web.config & JSON Configuration for IIS Server") {
+            steps {
+                echo "Clone iis-website-config.json file"
+                sh "cp -vRf $params.IIS_Configurations_Path/$params.IIS_Server_Hostname/$params.Application_Name/Web.config $WORKSPACE"
+                sh "cp -vRf $params.IIS_Configurations_Path/$params.IIS_Server_Hostname/$params.Application_Name/iis-website-config.json $WORKSPACE/Deployment"
+            }
+        }
+
+        stage('Append Deployment Pipeline Workspace Path to Vars File') {
+            steps {
+                sh "echo \"Deployment_Pipeline_Workspace: '$env.workspace'\" | tee -a Deployment/Deployment_Variables.txt"
+            }
+        }
+        
+        stage('Append Web.config Path to Vars File') {
+            steps {
+                sh "echo \"WebConfig_Jenkins_Path: '$env.workspace'\" | tee -a Deployment/Deployment_Variables.txt"
+                sh "cat Deployment/Deployment_Variables.txt"     
+            }
+        }
+        
+        stage('Download Artifact From Nexus Repository Release') {
+            steps {
+                echo 'Downloading Release Artifact ......'
+                
+                withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId:'Nexus_Credentials', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD']]) {
+                     sh "curl -v -u $USERNAME:$PASSWORD -o ${WORKSPACE}/${params.Application_Name}.zip https://nexus.btech.com/repository/${params.Application_Name}-Release/${params.Deployment_Version}/${params.Application_Name}.zip"
+                }
+            }
+        }
+        
+        stage('Copy Deployment Package Into Target Server') {
+            steps {
+                script {
+                    echo "Copying Deployment Package Into Target Server ...."
+                    sh "/var/lib/jenkins/.local/bin/ansible-playbook -i Deployment/Deployment_inventory.txt Deployment/10-Copy_Deployment_Package_into_Target.yaml -vvv"
+                }
+            }    
+        }
+
+        stage("Clone Web.config") {
+            when { 
+                expression { 
+                    params.Web_Config_Changed != 'true' 
+                } 
+            }
+            
+            steps {
+                echo "Replace Current Web.config File if exists"
+                sh "/var/lib/jenkins/.local/bin/ansible-playbook -i Deployment/Deployment_inventory.txt Deployment/20_clone_web_config.yaml -vvv"
+            }
+        }
+
+        stage("Backup Current Package") {
+            steps {
+                echo "Backup current Package"
+                sh "/var/lib/jenkins/.local/bin/ansible-playbook -i Deployment/Deployment_inventory.txt Deployment/25_backup_current_package.yaml -vvv"
+            }
+        }
+
+        stage("Deploy Package") {
+            steps {
+              script {
+                catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+                    echo "Deploy Package"
+                    sh "/var/lib/jenkins/.local/bin/ansible-playbook -i Deployment/Deployment_inventory.txt Deployment/30_deploy_package.yaml -vvv"
+                    newPackageDeployed = true
+                }
+              }    
+            }
+        }
+        
+        stage("Activate Rollback") {
+            when { 
+                expression {
+                    newPackageDeployed == false
+                } 
+            }
+            steps {
+                script {  
+                  echo "Activate Rollback"
+                  sh "/var/lib/jenkins/.local/bin/ansible-playbook -i Deployment/Deployment_inventory.txt Deployment/35_rollback_deploy.yaml -vvv"
+              }
+            }    
+        }
+    }
+}

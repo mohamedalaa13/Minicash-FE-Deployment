@@ -1,0 +1,32 @@
+- name: 10- Copy Deployment Package into Target Server
+  hosts: win
+  gather_facts: false
+  vars_files:
+    Deployment_Variables.txt
+  tasks:
+
+    - name: "Check If the {{ local_deployment_package_path }} Folder exists"
+      ansible.windows.win_stat:
+        path: "{{ local_deployment_package_path }}"
+      register: dir_data
+
+    - name: "Delete the {{ local_deployment_package_path }} Folder if it exists"
+      ansible.windows.win_file:
+        path: "{{ local_deployment_package_path }}"
+        state: absent
+      when: dir_data.stat.exists == true
+
+    - name: "Create {{ local_deployment_package_path }} Folder"
+      ansible.windows.win_file:
+        path: "{{ local_deployment_package_path }}"
+        state: directory
+
+    - name: "Copy {{ app_name }} into tagret {{ ansible_hostname }} Server"
+      win_copy:
+        src: "{{ Deployment_Pipeline_Workspace }}/{{ app_name }}.zip"
+        dest: "{{ local_deployment_package_path }}\\{{ app_name }}.zip"
+
+    - name: Unzip {{ app_name }} Deploymet Package on Target Server
+      community.windows.win_unzip:
+        src: "{{ local_deployment_package_path }}\\{{ app_name }}.zip"
+        dest: "{{ local_deployment_package_path }}\\"
